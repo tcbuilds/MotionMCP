@@ -12,10 +12,6 @@ bindings = [
 tag = "v1"
 new_sqlite_classes = ["MotionMCPAgent"]
 
-[[kv_namespaces]]
-binding = "OAUTH_KV"
-id = "f0c7449ca3aa4e44bf88f7b13b212300"
-
 [vars]
 MOTION_MCP_TOOLS = "essential"
 
