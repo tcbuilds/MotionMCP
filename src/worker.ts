@@ -64,9 +64,20 @@ export default {
       );
     }
 
-    // Validate secret path: /mcp/{secret}/...
-    // Clients configure URL as: https://your-worker.workers.dev/mcp/YOUR_SECRET
     const pathParts = url.pathname.split("/").filter(Boolean);
+    // Use serve() for Streamable HTTP transport (mount() only supports legacy SSE)
+    const mcpHandler = MotionMCPAgent.serve("/mcp") as {
+      fetch: (req: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
+    };
+
+    // Allow session message/sse paths through (authenticated by sessionId param)
+    // The McpAgent SSE transport returns URLs like /mcp/message?sessionId=... and
+    // /mcp/sse?sessionId=... which don't include the secret prefix
+    if (pathParts[0] === "mcp" && ["message", "sse"].includes(pathParts[1])) {
+      return mcpHandler.fetch(request, env, ctx);
+    }
+
+    // Validate secret for initial connection: /mcp/{secret} and /mcp/{secret}/...
     if (pathParts[0] !== "mcp" || pathParts[1] !== env.MOTION_MCP_SECRET) {
       return new Response("Not found", { status: 404 });
     }
@@ -77,8 +88,6 @@ export default {
     const cleanUrl = new URL(cleanPath, url.origin);
     const cleanRequest = new Request(cleanUrl, request);
 
-    return (
-      MotionMCPAgent.mount("/mcp") as { fetch: (req: Request, env: Env, ctx: ExecutionContext) => Promise<Response> }
-    ).fetch(cleanRequest, env, ctx);
+    return mcpHandler.fetch(cleanRequest, env, ctx);
   },
 };
