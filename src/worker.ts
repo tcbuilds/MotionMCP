@@ -76,7 +76,7 @@ const mcpApiHandler = {
     ctx: ExecutionContext,
   ): Promise<Response> {
     const server = buildMcpServer(env);
-    const handler = createMcpHandler(server, { route: "/mcp" });
+    const handler = createMcpHandler(server, { route: "/" });
     return handler(request, env, ctx);
   },
 };
@@ -89,7 +89,7 @@ function buildOAuthOptions(
   defaultHandler: OAuthProviderOptions<Env>["defaultHandler"],
 ): OAuthProviderOptions<Env> {
   return {
-    apiRoute: "/mcp",
+    apiRoute: "/",
     apiHandler: mcpApiHandler,
     defaultHandler,
     authorizeEndpoint: "/authorize",
@@ -164,7 +164,7 @@ const defaultHandler: OAuthProviderOptions<Env>["defaultHandler"] = {
   ): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname === "/" || url.pathname === "/health") {
+    if (url.pathname === "/health") {
       return new Response(
         JSON.stringify({
           status: "ok",
