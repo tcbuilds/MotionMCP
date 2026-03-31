@@ -1,3 +1,4 @@
+import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { MotionApiService } from "./services/motionApi";
@@ -13,6 +14,38 @@ interface Env {
   MOTION_MCP_SECRET: string;
   MOTION_MCP_TOOLS?: string;
   MCP_OBJECT: DurableObjectNamespace;
+  OAUTH_KV: KVNamespace;
+  OAUTH_PROVIDER: OAuthHelpers;
+}
+
+interface OAuthHelpers {
+  parseAuthRequest(request: Request): Promise<{
+    responseType: string;
+    clientId: string;
+    redirectUri: string;
+    scope: string[];
+    state: string;
+    codeChallenge?: string;
+    codeChallengeMethod?: string;
+    resource?: string | string[];
+  }>;
+  lookupClient(clientId: string): Promise<Record<string, unknown> | null>;
+  completeAuthorization(options: {
+    request: {
+      responseType: string;
+      clientId: string;
+      redirectUri: string;
+      scope: string[];
+      state: string;
+      codeChallenge?: string;
+      codeChallengeMethod?: string;
+      resource?: string | string[];
+    };
+    userId: string;
+    metadata: Record<string, unknown>;
+    scope: string[];
+    props: Record<string, unknown>;
+  }): Promise<{ redirectTo: string }>;
 }
 
 export class MotionMCPAgent extends McpAgent<Env> {
@@ -52,11 +85,22 @@ export class MotionMCPAgent extends McpAgent<Env> {
   }
 }
 
-export default {
-  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+// Handler for OAuth-authenticated MCP API requests
+const mcpApiHandler = {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    const mcpHandler = MotionMCPAgent.serve("/mcp") as {
+      fetch: (req: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
+    };
+    return mcpHandler.fetch(request, env, ctx);
+  },
+};
+
+// Handler for non-API routes: health check + OAuth authorize auto-approve
+const defaultHandler = {
+  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    // Health check endpoint
+    // Health check
     if (url.pathname === "/" || url.pathname === "/health") {
       return new Response(
         JSON.stringify({ status: "ok", server: "motion-mcp-server" }),
@@ -64,30 +108,40 @@ export default {
       );
     }
 
-    const pathParts = url.pathname.split("/").filter(Boolean);
-    // Use serve() for Streamable HTTP transport (mount() only supports legacy SSE)
-    const mcpHandler = MotionMCPAgent.serve("/mcp") as {
-      fetch: (req: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
-    };
-
-    // Allow session message/sse paths through (authenticated by sessionId param)
-    // The McpAgent SSE transport returns URLs like /mcp/message?sessionId=... and
-    // /mcp/sse?sessionId=... which don't include the secret prefix
-    if (pathParts[0] === "mcp" && ["message", "sse"].includes(pathParts[1])) {
-      return mcpHandler.fetch(request, env, ctx);
+    // OAuth authorize endpoint — auto-approve for single-user setup
+    if (url.pathname === "/authorize") {
+      return handleAuthorize(request, env);
     }
 
-    // Validate secret for initial connection: /mcp/{secret} and /mcp/{secret}/...
-    if (pathParts[0] !== "mcp" || pathParts[1] !== env.MOTION_MCP_SECRET) {
-      return new Response("Not found", { status: 404 });
-    }
-
-    // Rewrite path to strip the secret before passing to McpAgent
-    // e.g., /mcp/SECRET -> /mcp, /mcp/SECRET/sse -> /mcp/sse
-    const cleanPath = "/mcp" + (pathParts.length > 2 ? "/" + pathParts.slice(2).join("/") : "");
-    const cleanUrl = new URL(cleanPath, url.origin);
-    const cleanRequest = new Request(cleanUrl, request);
-
-    return mcpHandler.fetch(cleanRequest, env, ctx);
+    return new Response("Not found", { status: 404 });
   },
 };
+
+async function handleAuthorize(request: Request, env: Env): Promise<Response> {
+  const oauthReq = await env.OAUTH_PROVIDER.parseAuthRequest(request);
+
+  const clientInfo = await env.OAUTH_PROVIDER.lookupClient(oauthReq.clientId);
+  if (!clientInfo) {
+    return new Response("Unknown client", { status: 400 });
+  }
+
+  // Auto-approve: single user, no consent UI needed
+  const { redirectTo } = await env.OAUTH_PROVIDER.completeAuthorization({
+    request: oauthReq,
+    userId: "owner",
+    metadata: { label: "auto-approved" },
+    scope: oauthReq.scope,
+    props: { userId: "owner" },
+  });
+
+  return Response.redirect(redirectTo, 302);
+}
+
+export default new OAuthProvider({
+  apiRoute: "/mcp",
+  apiHandler: mcpApiHandler,
+  defaultHandler: defaultHandler,
+  authorizeEndpoint: "/authorize",
+  tokenEndpoint: "/token",
+  clientRegistrationEndpoint: "/register",
+});
