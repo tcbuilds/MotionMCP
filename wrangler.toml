@@ -3,18 +3,12 @@ main = "src/worker.ts"
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat"]
 
-[durable_objects]
-bindings = [
-  { name = "MCP_OBJECT", class_name = "MotionMCPAgent" }
-]
-
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["MotionMCPAgent"]
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "f0c7449ca3aa4e44bf88f7b13b212300"
 
 [vars]
 MOTION_MCP_TOOLS = "essential"
 
 # Secrets set via wrangler:
 #   npx wrangler secret put MOTION_API_KEY
-#   npx wrangler secret put MOTION_MCP_SECRET
